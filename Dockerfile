@@ -22,7 +22,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 # build` only.
 ARG DOMAINTUNE_BASE_MODEL="Qwen/Qwen2.5-0.5B-Instruct"
 ENV HF_HOME=/app/.hf_cache
-RUN uv run python -c "\
+RUN uv run --no-project python -c "\
 from transformers import AutoModelForCausalLM, AutoTokenizer; \
 AutoTokenizer.from_pretrained('${DOMAINTUNE_BASE_MODEL}'); \
 AutoModelForCausalLM.from_pretrained('${DOMAINTUNE_BASE_MODEL}')"
@@ -33,12 +33,12 @@ COPY src ./src
 COPY api ./api
 COPY models ./models
 
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --no-install-project
 
 ENV DOMAINTUNE_BASE_MODEL="${DOMAINTUNE_BASE_MODEL}"
-ENV DOMAINTUNE_ADAPTER_DIR="/app/models/domaintune-adapter-v2"
+ENV DOMAINTUNE_ADAPTER_DIR="/app/models/domaintune_adapter_v2"
 ENV PYTHONPATH="/app/src"
 
 EXPOSE 8000
 
-CMD ["uv", "run", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "--no-project", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
