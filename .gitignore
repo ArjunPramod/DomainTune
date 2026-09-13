@@ -10,6 +10,5 @@ wheels/
 .venv
 
 # DomainTune-specific
-models/*/
 !models/README.md
 .hf_cache/
