@@ -1,86 +1,93 @@
 # DomainTune
 
-Fine-tuning Qwen2.5-0.5B-Instruct with QLoRA to extract structured fields
-(company, date, address, total) from noisy OCR receipt text — and
-measuring whether fine-tuning actually beats a prompted base model
-(zero-shot and few-shot) on this task. See `HANDOVER.md` for the full
-project history, findings, and decisions made along the way.
+**Fine-tuning a small open-source LLM to extract structured data from noisy real-world receipts, evaluated against prompting-only baselines.**
 
-## Structure
+> Fine-tuned Qwen2.5-0.5B-Instruct (via QLoRA) to extract company, date, address, and total from receipt OCR text. Evaluated against the same base model prompted with zero and few examples, on 100 held-out receipts. Results and methodology below.
+
+## What this project demonstrates
+
+- **LLM fine-tuning end-to-end**: QLoRA (4-bit quantization + LoRA adapters), completion-only loss masking, hyperparameter iteration guided by loss curves, early stopping.
+- **Rigorous evaluation**: base model tested both zero-shot and few-shot before concluding fine-tuning was worth it. Multiple metrics — exact match, fuzzy/token-level F1, schema validity, complete-record accuracy — chosen to avoid a single misleading number.
+- **Data engineering discipline**: full-dataset distribution analysis before writing any normalization code, not assumptions from a handful of samples.
+- **Iteration based on evidence**: found overfitting in the loss curves and a specific weak field in the eval results, then designed a targeted fix (data augmentation + regularization) — which measurably worked.
+- **Production packaging**: FastAPI service, Dockerized, GPU/CPU auto-detection, dependency-locked with `uv`.
+
+## The problem
+
+Businesses need to pull structured data (who, when, where, how much) out of receipts. You could enforce a JSON schema with any LLM and call it done — but that doesn't tell you whether the *model* actually understands the task, or is just following a format. This project asks a more useful engineering question: **does fine-tuning a small model on this specific task meaningfully outperform just prompting a bigger process better?**
+
+The answer, measured rather than assumed: yes, substantially on 3 of 4 fields and structural reliability — with one honestly-reported weak spot.
+
+## Results
+
+**Total amount, extracted correctly:**
+
+| Approach | Total amount, exact match |
+|---|---|
+| Zero-shot base model | 0% |
+| Few-shot base model (3 examples) | 63% |
+| Fine-tuned, iteration 1 | 96% |
+| **Fine-tuned, iteration 2** | **97%** |
+
+Exact string match against ground truth, on 100 receipts held out from training.
+
+A stricter bar — every field on the receipt correct at once (company, date, address, total together, not just one):
+
+| Approach | Complete-record accuracy |
+|---|---|
+| Zero-shot base model | 0% |
+| Few-shot base model (3 examples) | 0% |
+| Fine-tuned, iteration 1 | 60% |
+| **Fine-tuned, iteration 2** | **68%** |
+
+*Methodology: greedy decoding, exact match after normalization (address allows fuzzy match ≥0.85 similarity), evaluated identically across all four approaches on the same 100 held-out receipts.*
+
+Field-by-field breakdown for the final model (iteration 2) against both baselines:
+
+| Metric | Zero-shot base | Few-shot base | **Fine-tuned** |
+|---|---|---|---|
+| Valid JSON output | 83% | 96% | **100%** |
+| Correct schema (flat, no nested junk) | 0% | 96% | **100%** |
+| Company name exact match | 27% | 55% | **92%** |
+| Date exact match | 35% | 68% | **97%** |
+| Total amount exact match | 0% | 63% | **97%** |
+| Address, fuzzy match | 0% | 0% | **74%** |
+| Every field correct (strict) | 0% | 0% | **54%** |
+
+The base model's failures aren't just wrong answers — it frequently invents its own JSON shape (nested objects instead of the requested flat fields), which is why zero-shot and few-shot both score 0% on schema and complete-record accuracy regardless of prompt quality. Fine-tuning fixes this structurally, not just numerically.
+
+**Known limitation**: address extraction is meaningfully weaker (74% fuzzy match) than the other three fields (92–97%). One iteration of targeted data augmentation improved it by 9 points; further gains likely need more training data diversity rather than more prompting or hyperparameter tuning. Reported directly — see the notebooks for the full before/after comparison.
+
+## How it was built
+
+1. **Data**: [SROIE receipt dataset](https://huggingface.co/datasets/jsdnrs/ICDAR2019-SROIE) (987 receipts) — inspected the *entire* dataset's field distributions, date formats, and edge cases before writing normalization code, catching issues (inconsistent date formats, negative totals, duplicate leakage between splits) that a "looks fine from 5 examples" approach would have missed.
+2. **Fine-tuning**: Qwen2.5-0.5B-Instruct, QLoRA (4-bit base + LoRA adapters), trained on Kaggle's free GPU tier. Loss only computed on the target JSON output, not the prompt — a fine-tuning detail that matters for training efficiency.
+3. **Evaluation**: same 100 receipts run through all three variants, scored on 7+ metrics chosen to separate different failure modes (a low score could mean "wrong content" or "wrong shape" — these need different fixes, so they're measured separately).
+4. **Iteration**: loss curves showed early overfitting; evaluation showed address as the weak field. Fixed both at once — light regularization (weight decay, dropout, early stopping) plus targeted data augmentation on the input text (address abbreviation variants, synthetic OCR noise) — and re-measured. Result: the table above, with no regressions on any other field.
+5. **Serving**: FastAPI + Docker, auto-detecting GPU/CPU at startup so the same image works in either environment.
+
+## Tech stack
+Python, PyTorch, Hugging Face Transformers/PEFT/Accelerate, bitsandbytes (QLoRA), FastAPI, Docker, `uv`.
+
+## Project structure
 
 ```
 domaintune/
-├── notebooks/
-│   ├── 01_data_preparation.ipynb   # SROIE → normalized, split, instruction-format data
-│   └── 02_fine_tuning.ipynb        # QLoRA fine-tuning + evaluation (v1 and v2)
-├── src/domaintune/
-│   ├── model.py                    # load base model + LoRA adapter, generate()
-│   ├── extraction.py               # JSON parsing/schema validation
-│   └── schemas.py                  # pydantic request/response models
-├── api/main.py                     # FastAPI app: POST /extract, GET /health
-├── models/                         # adapter files go here (gitignored, see models/README.md)
-├── examples/example_client.py      # minimal usage example
-├── Dockerfile
-└── pyproject.toml                  # uv-managed
+├── notebooks/         # data prep, fine-tuning, evaluation (fully documented, runnable)
+├── src/domaintune/     # inference: model loading, JSON extraction/validation
+├── api/                # FastAPI service
+├── results/            # evaluation metrics (CSV)
+└── Dockerfile
 ```
 
-## Notebooks
-
-Run in Kaggle/Colab, independent of the local `uv` environment (plain
-`pip install` inside the notebook). See `HANDOVER.md` for what each
-notebook does and the results.
-
-## API — local dev
+## Running it
 
 ```bash
 uv sync
-cd models && unzip /path/to/domaintune_adapter_v2.zip -d domaintune-adapter-v2 && cd ..
+# unzip the trained adapter into models/domaintune_adapter_v2/
 uv run uvicorn api.main:app --reload
+curl -X POST http://localhost:8000/extract -H "Content-Type: application/json" \
+  -d '{"ocr_text": "..."}'
 ```
 
-GPU vs CPU is auto-detected at startup (4-bit + LoRA on GPU, float32 + LoRA
-on CPU — same adapter either way).
-
-Try it:
-
-```bash
-curl http://localhost:8000/health
-
-curl -X POST http://localhost:8000/extract \
-  -H "Content-Type: application/json" \
-  -d '{"ocr_text": "TAN WOON YANN\nBOOK TA .K(TAMAN DAYA) SDN BND\n...\nTOTAL: 9.00"}'
-```
-
-or:
-
-```bash
-uv run python examples/example_client.py
-```
-
-Interactive docs at `http://localhost:8000/docs` (FastAPI's built-in
-Swagger UI).
-
-## API — Docker
-
-```bash
-# adapter must already be unzipped under models/domaintune-adapter-v2/
-docker build -t domaintune .
-docker run -p 8000:8000 domaintune
-```
-
-The base model is downloaded once at build time and baked into the image,
-so the container runs offline. For GPU inference, run on a CUDA-enabled
-host with `docker run --gpus all ...` — the same image auto-detects and
-uses it.
-
-## Dataset
-
-[`jsdnrs/ICDAR2019-SROIE`](https://huggingface.co/datasets/jsdnrs/ICDAR2019-SROIE)
-on the Hugging Face Hub — 987 receipts with OCR text (`words`) and
-ground-truth key fields (`entities`: company, date, address, total).
-
-## Status
-
-Data prep, fine-tuning (v1 + v2), and evaluation are done — see
-`HANDOVER.md`. `domaintune-adapter-v2` is the adopted model. API/Docker
-layer above is the current phase.
+Or via Docker: `docker build -t domaintune . && docker run -p 8000:8000 domaintune`.
