@@ -1,0 +1,5 @@
+variant,json_valid_%,schema_valid_%,company_exact_%,date_exact_%,total_exact_%,address_exact_%,address_fuzzy_%,address_f1,address_precision,address_recall,avg_fields_missing,complete_record_strict_%,complete_record_practical_%,avg_completion_tokens,avg_latency_sec
+zero_shot_base,83.0,0.0,27.0,35.0,0.0,0.0,0.0,0.0,0.0,0.0,0.68,0.0,0.0,136.2,6.53
+few_shot_base,96.0,96.0,55.0,68.0,63.0,0.0,0.0,0.35,0.477,0.29,0.16,0.0,0.0,75.0,4.02
+fine_tuned,100.0,100.0,90.0,97.0,96.0,46.0,65.0,0.845,0.868,0.834,0.0,44.0,60.0,82.7,7.19
+fine_tuned_v2,100.0,100.0,92.0,97.0,97.0,55.0,74.0,0.872,0.883,0.87,0.0,54.0,68.0,84.1,7.33
